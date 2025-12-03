@@ -1,6 +1,11 @@
 import express from 'express';
+import cors from 'cors';
 
 const app = express();
+
+// Middleware
+app.use(cors());           // allow requests from frontend (5173)
+app.use(express.json());   // prepare for future POST/PUT
 
 // In-memory lessons data (temporary)
 const lessons = [
