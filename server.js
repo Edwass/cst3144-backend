@@ -2,13 +2,13 @@ import express from 'express';
 import cors from 'cors';
 
 const app = express();
+const PORT = 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// In-memory lessons data (temporary)
-const lessons = [
+let lessons = [
   {
     id: 1,
     title: 'Intro to JavaScript',
@@ -23,33 +23,31 @@ const lessons = [
   }
 ];
 
-// Root route
+// Test route
 app.get('/', (req, res) => {
   res.json({ message: 'Backend API working' });
 });
 
-// Health check route
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Lessons list route
-app.get('/api/lessons', (req, res) => {
+// Get all lessons
+app.get('/lessons', (req, res) => {
   res.json(lessons);
 });
 
-// Create lesson route
-app.post('/api/lessons', (req, res) => {
+// Add a new lesson
+app.post('/lessons', (req, res) => {
   const { title, description, date } = req.body;
 
   if (!title || !description || !date) {
-    return res.status(400).json({ error: 'title, description and date are required' });
+    return res.status(400).json({
+      error: 'title, description and date are required'
+    });
   }
 
-  const newId = lessons.length ? Math.max(...lessons.map(l => l.id)) + 1 : 1;
+  const nextId =
+    lessons.length > 0 ? Math.max(...lessons.map((l) => l.id)) + 1 : 1;
 
   const newLesson = {
-    id: newId,
+    id: nextId,
     title,
     description,
     date
@@ -60,5 +58,6 @@ app.post('/api/lessons', (req, res) => {
   res.status(201).json(newLesson);
 });
 
-const PORT = 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
