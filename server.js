@@ -23,14 +23,14 @@ app.use((req, res, next) => {
 });
 
 // ----------------------------------------------------
-// Static files middleware for lesson images
+// Static files (for lesson images)
 // ----------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
 
 // ----------------------------------------------------
-// MongoDB Atlas connection
+// MongoDB Atlas Connection
 // ----------------------------------------------------
 const uri =
   'mongodb+srv://Edwas:5NBNYbBM4sYc02NX@cluster0.3ohe6lz.mongodb.net/afterSchoolDB?retryWrites=true&w=majority&appName=Cluster0';
@@ -65,19 +65,19 @@ startServer();
 // Routes
 // ----------------------------------------------------
 
-// Simple health check
+// Root test
 app.get('/', (req, res) => {
   res.json({ message: 'Backend API working' });
 });
 
-// ------------------------------------------
-// GET all lessons
-// ------------------------------------------
+// ----------------------------------------------------
+// GET ALL LESSONS
+// ----------------------------------------------------
 app.get('/lessons', async (req, res) => {
   try {
     const docs = await lessonCollection.find().toArray();
 
-    const lessons = docs.map(doc => ({
+    const lessons = docs.map((doc) => ({
       id: doc._id.toString(),
       topic: doc.topic,
       location: doc.location,
@@ -92,9 +92,9 @@ app.get('/lessons', async (req, res) => {
   }
 });
 
-// ------------------------------------------
-// CREATE a new lesson
-// ------------------------------------------
+// ----------------------------------------------------
+// CREATE LESSON
+// ----------------------------------------------------
 app.post('/lessons', async (req, res) => {
   const { topic, location, price, space } = req.body;
 
@@ -117,24 +117,112 @@ app.post('/lessons', async (req, res) => {
   }
 });
 
-// ------------------------------------------
-// CREATE an order
-// ------------------------------------------
+// ----------------------------------------------------
+// CREATE ORDER (high-marks version)
+// 1. Validate
+// 2. Check stock
+// 3. Insert order
+// 4. Bulk update spaces
+// ----------------------------------------------------
 app.post('/orders', async (req, res) => {
-  const orderData = req.body;
+  const { name, phone, items } = req.body;
+
+  if (!name || !phone || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({
+      error: 'name, phone and items[] are required',
+    });
+  }
 
   try {
-    const result = await orderCollection.insertOne(orderData);
-    res.status(201).json(result);
+    // Build map: lessonId -> quantity requested
+    const qtyMap = new Map();
+    for (const it of items) {
+      const id = it.lessonId;
+      const qty = Number(it.quantity) || 0;
+
+      if (!id || qty <= 0) continue;
+      qtyMap.set(id, (qtyMap.get(id) || 0) + qty);
+    }
+
+    if (qtyMap.size === 0) {
+      return res.status(400).json({ error: 'No valid lesson quantities found' });
+    }
+
+    // Fetch all relevant lessons
+    const ids = [...qtyMap.keys()].map((id) => new ObjectId(id));
+    const lessons = await lessonCollection
+      .find({ _id: { $in: ids } })
+      .toArray();
+
+    // Check requested vs available
+    for (const lesson of lessons) {
+      const requested = qtyMap.get(lesson._id.toString()) || 0;
+      if (requested > lesson.space) {
+        return res.status(400).json({
+          error: `Not enough spaces for ${lesson.topic}. Requested ${requested}, only ${lesson.space} available.`,
+        });
+      }
+    }
+
+    // Insert order document
+    const orderDoc = {
+      name,
+      phone,
+      items,
+      createdAt: new Date(),
+    };
+
+    const orderResult = await orderCollection.insertOne(orderDoc);
+
+    // Bulk update lesson spaces
+    const bulkOps = [...qtyMap.entries()].map(([id, qty]) => ({
+      updateOne: {
+        filter: { _id: new ObjectId(id) },
+        update: { $inc: { space: -qty } },
+      },
+    }));
+
+    await lessonCollection.bulkWrite(bulkOps);
+
+    res.status(201).json({
+      message: 'Order created and spaces updated',
+      orderId: orderResult.insertedId,
+    });
   } catch (err) {
     console.error('Error creating order:', err);
     res.status(500).json({ error: 'Failed to create order' });
   }
 });
 
-// ------------------------------------------
-// UPDATE lesson space count
-// ------------------------------------------
+// ----------------------------------------------------
+// GET ALL ORDERS (for admin / Postman)
+// ----------------------------------------------------
+app.get('/orders', async (req, res) => {
+  try {
+    const docs = await orderCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const orders = docs.map((doc) => ({
+      id: doc._id.toString(),
+      name: doc.name,
+      phone: doc.phone,
+      items: doc.items,
+      createdAt: doc.createdAt,
+    }));
+
+    res.json(orders);
+  } catch (err) {
+    console.error('Error fetching orders:', err);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// ----------------------------------------------------
+// MANUAL UPDATE LESSON SPACE (not used by checkout now,
+// but good to keep for testing / coursework)
+// ----------------------------------------------------
 app.put('/lessons/:id', async (req, res) => {
   const id = req.params.id;
   const { space } = req.body;
@@ -156,18 +244,18 @@ app.put('/lessons/:id', async (req, res) => {
   }
 });
 
-// ------------------------------------------
+// ----------------------------------------------------
 // SEARCH lessons (GET /search?q=...)
-// ------------------------------------------
+// ----------------------------------------------------
 app.get('/search', async (req, res) => {
   const q = (req.query.q || '').trim();
 
   try {
-    // If no query text, return all lessons
+    // No query -> return all lessons
     if (!q) {
       const docs = await lessonCollection.find().toArray();
       return res.json(
-        docs.map(doc => ({
+        docs.map((doc) => ({
           id: doc._id.toString(),
           topic: doc.topic,
           location: doc.location,
@@ -184,16 +272,12 @@ app.get('/search', async (req, res) => {
       : [{ price: num }, { space: num }];
 
     const filter = {
-      $or: [
-        { topic: regex },
-        { location: regex },
-        ...numericConditions,
-      ],
+      $or: [{ topic: regex }, { location: regex }, ...numericConditions],
     };
 
     const docs = await lessonCollection.find(filter).toArray();
 
-    const lessons = docs.map(doc => ({
+    const lessons = docs.map((doc) => ({
       id: doc._id.toString(),
       topic: doc.topic,
       location: doc.location,
@@ -206,4 +290,16 @@ app.get('/search', async (req, res) => {
     console.error('Error searching lessons:', err);
     res.status(500).json({ error: 'Search failed' });
   }
+});
+
+// ----------------------------------------------------
+// 404 + Global error handler
+// ----------------------------------------------------
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
